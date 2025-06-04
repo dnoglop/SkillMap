@@ -1,0 +1,6 @@
+{
+  "name": "SkillMap AI",
+  "description": "Uma ferramenta com IA para diagnosticar necessidades de equipes e sugerir trilhas de treinamento personalizadas usando Google Gemini.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
