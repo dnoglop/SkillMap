@@ -3,70 +3,67 @@ import { GoogleGenAI } from "@google/genai";
 import type { GenerateContentResponse } from "@google/genai";
 import type { FormData, NivelMaturidade } from '../types';
 
-let apiKey: string | undefined = undefined;
-let apiKeySource: string = "Não encontrada";
+let ai: GoogleGenAI | null = null; // Module-level cache for the initialized client
+let lastInitializationError: Error | null = null; // Store the last error during initialization attempt
 
-// 1. Tenta obter a chave de API da configuração global injetada por index.tsx
-if (typeof window !== 'undefined' && (window as any).SKILLMAP_CONFIG) {
-  const configKey = (window as any).SKILLMAP_CONFIG.API_KEY;
-  if (typeof configKey === 'string' && configKey.trim() !== '') {
-    apiKey = configKey;
-    apiKeySource = "window.SKILLMAP_CONFIG.API_KEY (definida em index.tsx)";
-  }
-}
-
-// 2. Fallback (menos provável de funcionar no Vercel para o frontend se o passo 1 falhar, mas bom para local)
-// Esta seção agora é mais um fallback ou para cenários onde window.SKILLMAP_CONFIG não foi populado.
-if (!apiKey && typeof process !== 'undefined' && process.env) {
-  console.warn("geminiService: API Key não encontrada em window.SKILLMAP_CONFIG. Tentando process.env (fallback).");
-  if (typeof process.env.NEXT_PUBLIC_API_KEY === 'string' && process.env.NEXT_PUBLIC_API_KEY.trim() !== '') {
-    apiKey = process.env.NEXT_PUBLIC_API_KEY;
-    apiKeySource = "process.env.NEXT_PUBLIC_API_KEY (fallback)";
-  } else if (typeof process.env.VITE_API_KEY === 'string' && process.env.VITE_API_KEY.trim() !== '') {
-    apiKey = process.env.VITE_API_KEY;
-    apiKeySource = "process.env.VITE_API_KEY (fallback)";
-  } else if (typeof process.env.REACT_APP_API_KEY === 'string' && process.env.REACT_APP_API_KEY.trim() !== '') {
-    apiKey = process.env.REACT_APP_API_KEY;
-    apiKeySource = "process.env.REACT_APP_API_KEY (fallback)";
-  } else if (typeof process.env.API_KEY === 'string' && process.env.API_KEY.trim() !== '') {
-    apiKey = process.env.API_KEY;
-    apiKeySource = "process.env.API_KEY (fallback local)";
-  }
-}
-
-let apiKeyFoundStatus: boolean = false;
-let genAiInitializationError: Error | null = null;
-let ai: GoogleGenAI | null = null;
-
-if (apiKey && typeof apiKey === 'string' && apiKey.trim() !== '') {
-  apiKeyFoundStatus = true;
-  // Log reduzido por segurança, mas confirma a fonte.
-  console.info(`INFO (geminiService): Chave de API será utilizada. Fonte: ${apiKeySource}.`);
-  try {
-    ai = new GoogleGenAI({ apiKey });
-    console.info("INFO (geminiService): Cliente GoogleGenAI inicializado com sucesso.");
-  } catch (e) {
-    console.error(`ERRO CRÍTICO (geminiService): Falha ao inicializar o cliente GoogleGenAI com a API_KEY obtida de ${apiKeySource}. Detalhes:`, e);
-    if (e instanceof Error) {
-        genAiInitializationError = e;
-    } else {
-        genAiInitializationError = new Error(String(e));
+// Helper to get the API key from window.SKILLMAP_CONFIG
+const getApiKeyFromConfig = (): { key: string | undefined, source: string, placeholderDetected: boolean } => {
+  if (typeof window !== 'undefined' && (window as any).SKILLMAP_CONFIG) {
+    const configKey = (window as any).SKILLMAP_CONFIG.API_KEY;
+    if (typeof configKey === 'string' && configKey.trim() !== '') {
+      if (configKey.trim() === "__MANUAL_API_KEY_PLACEHOLDER__") {
+        return { key: undefined, source: "window.SKILLMAP_CONFIG.API_KEY (placeholder)", placeholderDetected: true };
+      }
+      return { key: configKey, source: "window.SKILLMAP_CONFIG.API_KEY (do index.html)", placeholderDetected: false };
     }
-    ai = null;
   }
-} else {
-  apiKeyFoundStatus = false;
-  console.warn(
-    "AVISO (geminiService): Nenhuma Chave de API válida foi encontrada. \n" +
-    "Fonte primária (window.SKILLMAP_CONFIG.API_KEY) não continha uma chave válida. \n" +
-    "Tentativas de fallback via process.env também falharam ou não encontraram uma chave. \n" +
-    "O serviço SkillMap AI necessita da API_KEY para funcionar. \n" +
-    "Verifique: \n" +
-    "  1. Se a variável NEXT_PUBLIC_API_KEY (ou VITE_API_KEY, etc.) está configurada corretamente no seu projeto Vercel. \n" +
-    "  2. Se o código no início do 'index.tsx' está sendo executado e capaz de ler essa variável de ambiente. \n" +
-    "  3. Os logs do console para mensagens do 'API Key injector (index.tsx)'."
-  );
-}
+  return { key: undefined, source: "Não encontrada ou inválida", placeholderDetected: false };
+};
+
+const getAiClient = (): GoogleGenAI => {
+  if (ai) {
+    // console.log("INFO (geminiService - getAiClient): Retornando cliente GoogleGenAI cacheado.");
+    return ai; 
+  }
+
+  lastInitializationError = null; 
+  const { key: apiKeyString, source: apiKeySourceString, placeholderDetected } = getApiKeyFromConfig();
+
+  if (apiKeyString) {
+    console.info(`INFO (geminiService - getAiClient): Tentando inicializar GoogleGenAI. Fonte da chave: ${apiKeySourceString}. (Valor omitido)`);
+    try {
+      ai = new GoogleGenAI({ apiKey: apiKeyString });
+      console.info("INFO (geminiService - getAiClient): Cliente GoogleGenAI inicializado com sucesso.");
+      return ai;
+    } catch (e) {
+      console.error(`ERRO CRÍTICO (geminiService - getAiClient): Falha ao inicializar o cliente GoogleGenAI com a API_KEY obtida de ${apiKeySourceString}. Detalhes:`, e);
+      if (e instanceof Error) {
+        lastInitializationError = e;
+      } else {
+        lastInitializationError = new Error(String(e));
+      }
+      ai = null; 
+      throw new Error(`Falha na inicialização do serviço Gemini: ${lastInitializationError.message}`);
+    }
+  } else {
+    let errorMsg = "";
+    if (placeholderDetected) {
+        errorMsg = "A Chave de API (API_KEY) em window.SKILLMAP_CONFIG.API_KEY ainda contém o valor placeholder '__MANUAL_API_KEY_PLACEHOLDER__'. \n" +
+                   "Isso indica que a substituição da chave durante o processo de build no Vercel (ou sua plataforma de deploy) falhou ou não foi configurada corretamente. \n" +
+                   "Verifique: \n" +
+                   "  1. Se a variável de ambiente (ex: NEXT_PUBLIC_API_KEY) está definida no seu projeto Vercel. \n" +
+                   "  2. Se o 'Build Command' no Vercel (ex: `sed -i \"s|__MANUAL_API_KEY_PLACEHOLDER__|\${NEXT_PUBLIC_API_KEY}|g\" index.html`) está correto e sendo executado. \n" +
+                   "  3. Os logs de build do Vercel para quaisquer erros durante a substituição.";
+    } else {
+        errorMsg = "A Chave de API (API_KEY) não foi encontrada em window.SKILLMAP_CONFIG.API_KEY no momento da utilização. \n" +
+                   "Isso pode ocorrer se a chave não foi injetada corretamente no 'index.html' ou se 'window.SKILLMAP_CONFIG' não está acessível. \n" +
+                   "Verifique as etapas de configuração da API Key mencionadas anteriormente e os logs do 'API Key injector (index.tsx)' no console.";
+    }
+    console.warn("AVISO (geminiService - getAiClient): " + errorMsg);
+    lastInitializationError = new Error(errorMsg);
+    throw new Error("Chave de API não configurada ou inválida para o serviço Gemini.");
+  }
+};
 
 function nivelMaturidadeLabel(nivel?: NivelMaturidade): string {
   if (nivel === undefined) return 'Não especificado';
@@ -176,30 +173,20 @@ FRASE DE MOTIVAÇÃO: [Crie uma frase de motivação e incentivo, usando o conte
 }
 
 export const suggestTrainingPath = async (formData: FormData): Promise<string> => {
-  if (!ai) {
-    let specificReason = "";
-    if (!apiKeyFoundStatus) {
-      specificReason = "A Chave de API (NEXT_PUBLIC_API_KEY ou similar) não foi encontrada. \n" +
-                       "Causas prováveis: \n" +
-                       "  1. A variável de ambiente (ex: NEXT_PUBLIC_API_KEY) não está configurada corretamente no seu projeto Vercel. \n" +
-                       "  2. A configuração no Vercel está incorreta ou um novo deploy não foi feito após a alteração. \n" +
-                       "  3. O código no início do arquivo 'index.tsx' não conseguiu capturar a chave de process.env e passá-la para 'window.SKILLMAP_CONFIG.API_KEY'. \n" +
-                       "Verifique os logs do console do navegador (procure por mensagens de 'API Key injector (index.tsx)' e avisos do 'geminiService').";
-    } else if (genAiInitializationError) {
-      specificReason = `A Chave de API foi encontrada (através de: ${apiKeySource}), mas a inicialização do serviço de IA falhou. \n" +
-                       "Detalhe do erro do SDK Gemini: '${genAiInitializationError.message}'. \n" +
-                       "Isso pode ser devido a uma chave inválida, API do Gemini não habilitada no projeto Google Cloud, problemas de cota/faturamento, ou outra configuração incorreta da chave. \n" +
-                       "Verifique os logs do console para mais detalhes e as configurações da sua chave no Google AI Studio ou Google Cloud Console.`;
-    } else {
-      specificReason = "O serviço de IA não está inicializado por um motivo desconhecido. A chave de API parece ter sido encontrada (ou não houve erro na sua busca), mas a instância do cliente de IA não foi criada. Verifique os logs do console.";
-    }
-    throw new Error(`O serviço SkillMap AI não está disponível. ${specificReason}`);
+  let currentAiClient: GoogleGenAI;
+  try {
+    currentAiClient = getAiClient();
+  } catch (initError: any) {
+    // Erro originado de getAiClient (chave não encontrada ou falha na inicialização)
+    // lastInitializationError já deve estar definido por getAiClient
+    const reason = lastInitializationError?.message || initError.message || "Erro desconhecido durante a configuração do serviço de IA.";
+    throw new Error(`O serviço SkillMap AI não está disponível. Razão: ${reason}`);
   }
   
   const prompt = buildPrompt(formData);
   
   try {
-    const response: GenerateContentResponse = await ai.models.generateContent({
+    const response: GenerateContentResponse = await currentAiClient.models.generateContent({
       model: 'gemini-2.5-flash-preview-04-17', 
       contents: prompt, 
       config: { 
@@ -225,9 +212,15 @@ export const suggestTrainingPath = async (formData: FormData): Promise<string> =
   } catch (e: any) {
     console.error("Erro ao chamar a API Gemini:", e);
 
+    // Se o erro já é o nosso erro customizado de 'serviço não disponível' vindo de getAiClient, apenas relança.
     if (e instanceof Error && e.message.startsWith("O serviço SkillMap AI não está disponível")) {
       throw e;
     }
+    // Se o erro veio da falha de inicialização dentro de getAiClient, mas não foi encapsulado acima.
+    if (lastInitializationError && e.message === `Falha na inicialização do serviço Gemini: ${lastInitializationError.message}`) {
+        throw new Error(`O serviço SkillMap AI não está disponível. Razão: ${lastInitializationError.message}`);
+    }
+
 
     let detailedErrorMessage: string;
 
@@ -239,15 +232,17 @@ export const suggestTrainingPath = async (formData: FormData): Promise<string> =
       detailedErrorMessage = "Falha ao gerar trilha de treinamento devido a um erro desconhecido durante a chamada da API.";
     }
     
-    if (e?.message?.toLowerCase().includes('api key') || e?.toString().toLowerCase().includes('api key not valid')) {
-        detailedErrorMessage += ` Detalhe da API: Problema com a Chave de API (pode ser inválida, não autorizada ou com cotas excedidas).`;
-    } else if (e?.message) {
-        if (!detailedErrorMessage.includes(e.message)) {
+    // Adiciona informações sobre problemas comuns da API Key se detectados na mensagem de erro original
+    const errorMessageLower = e?.message?.toLowerCase() || e?.toString().toLowerCase();
+    if (errorMessageLower.includes('api key') || errorMessageLower.includes('api key not valid') || errorMessageLower.includes('permission denied')) {
+        detailedErrorMessage += ` Detalhe da API: Problema com a Chave de API (pode ser inválida, não autorizada, com permissões incorretas ou com cotas excedidas). Verifique as configurações da chave no Google Cloud Console.`;
+    } else if (e?.message) { 
+        if (!detailedErrorMessage.includes(e.message)) { 
             detailedErrorMessage += ` Detalhe da API: ${e.message}`;
         }
     }
 
-    detailedErrorMessage += " Por favor, verifique as cotas da sua chave de API, conexão de rede e detalhes de entrada. Se o problema continuar, contate o suporte ou verifique o status do serviço.";
+    detailedErrorMessage += " Por favor, verifique também as cotas da sua chave de API, conexão de rede e detalhes de entrada. Se o problema continuar, contate o suporte ou verifique o status do serviço Gemini.";
     throw new Error(detailedErrorMessage);
   }
 };
