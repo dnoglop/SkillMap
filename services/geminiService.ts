@@ -1,16 +1,17 @@
 
-
-
 import { GoogleGenAI } from "@google/genai";
 import type { GenerateContentResponse } from "@google/genai";
 import type { FormData, NivelMaturidade, MetodoAvaliacaoImpacto } from '../types';
 
 let apiKeyFromEnv: string | undefined = undefined;
+let apiKeyFound: boolean = false;
+let genAiInitializationError: Error | null = null;
 
 // Try to get API_KEY, then common prefixed versions
 if (typeof process !== 'undefined' && process.env) {
   if (typeof process.env.API_KEY === 'string' && process.env.API_KEY.trim() !== '') {
     apiKeyFromEnv = process.env.API_KEY;
+    console.info("INFO: Usando API_KEY de process.env.API_KEY.");
   } else if (typeof process.env.NEXT_PUBLIC_API_KEY === 'string' && process.env.NEXT_PUBLIC_API_KEY.trim() !== '') {
     apiKeyFromEnv = process.env.NEXT_PUBLIC_API_KEY;
     console.info("INFO: Usando API_KEY de process.env.NEXT_PUBLIC_API_KEY.");
@@ -24,24 +25,30 @@ if (typeof process !== 'undefined' && process.env) {
 }
 
 
-if (!apiKeyFromEnv) {
+let ai: GoogleGenAI | null = null;
+
+if (apiKeyFromEnv) {
+  apiKeyFound = true;
+  try {
+    ai = new GoogleGenAI({ apiKey: apiKeyFromEnv });
+    console.info("INFO: Cliente GoogleGenAI inicializado com sucesso.");
+  } catch (e) {
+    console.error("ERRO CRÍTICO: Falha ao inicializar o cliente GoogleGenAI com a API_KEY fornecida. Detalhes:", e);
+    if (e instanceof Error) {
+        genAiInitializationError = e;
+    } else {
+        genAiInitializationError = new Error(String(e));
+    }
+    ai = null; // Ensure ai is null if initialization fails
+  }
+} else {
+  apiKeyFound = false;
   console.warn(
     "AVISO: A variável de ambiente API_KEY (ou suas variações prefixadas como NEXT_PUBLIC_API_KEY, VITE_API_KEY) não foi encontrada ou 'process.env' não está acessível. " +
     "O serviço SkillMap AI necessita da API_KEY para funcionar. " +
     "Se esta mensagem aparece no browser, garanta que API_KEY (ou uma de suas versões prefixadas) é injetada no ambiente de execução do Vercel (ou sua plataforma de deploy), " +
     "ou o serviço de IA não funcionará."
   );
-}
-
-let ai: GoogleGenAI | null = null;
-
-if (apiKeyFromEnv) {
-  try {
-    ai = new GoogleGenAI({ apiKey: apiKeyFromEnv });
-  } catch (e) {
-    console.error("Falha ao inicializar o cliente GoogleGenAI com a API_KEY fornecida. Isso pode ocorrer se a chave for inválida, as cotas foram excedidas, ou houver problemas de rede/configuração. Detalhes do erro:", e);
-    ai = null; // Ensure ai is null if initialization fails
-  }
 }
 
 function nivelMaturidadeLabel(nivel?: NivelMaturidade): string {
@@ -153,7 +160,16 @@ FRASE DE MOTIVAÇÃO: [Crie uma frase de motivação e incentivo, usando o conte
 
 export const suggestTrainingPath = async (formData: FormData): Promise<string> => {
   if (!ai) {
-    throw new Error("O serviço SkillMap AI não está disponível. Causa provável: A Chave de API (API_KEY ou suas variações prefixadas como NEXT_PUBLIC_API_KEY) não foi configurada corretamente no ambiente de execução ou falha na inicialização do serviço. Verifique as configurações do seu projeto no Vercel (ou sua plataforma de deploy) e os logs do console.");
+    let specificReason = "";
+    if (!apiKeyFound) {
+      specificReason = "A Chave de API (API_KEY ou suas variações prefixadas como NEXT_PUBLIC_API_KEY) não foi encontrada no ambiente de execução. Verifique as configurações de variáveis de ambiente no Vercel (ou sua plataforma de deploy) e os logs do console. Certifique-se que a variável (ex: NEXT_PUBLIC_API_KEY) está corretamente definida e que um novo deploy foi feito após a alteração.";
+    } else if (genAiInitializationError) {
+      specificReason = `A Chave de API foi encontrada, mas a inicialização do serviço de IA falhou. Detalhe do erro: '${genAiInitializationError.message}'. Isso pode ser devido a uma chave inválida, API não habilitada no projeto Google Cloud, problemas de cota/faturamento, ou configuração incorreta da chave. Verifique os logs do console para mais detalhes e as configurações da sua chave no Google AI Studio ou Google Cloud Console.`;
+    } else {
+      // This case should ideally not be hit if the logic above is correct
+      specificReason = "O serviço de IA não está inicializado por um motivo desconhecido, embora a chave de API pareça ter sido encontrada. Verifique os logs do console para mensagens de erro detalhadas.";
+    }
+    throw new Error(`O serviço SkillMap AI não está disponível. Causa provável: ${specificReason}`);
   }
   
   const prompt = buildPrompt(formData);
@@ -178,7 +194,6 @@ export const suggestTrainingPath = async (formData: FormData): Promise<string> =
       throw new Error(troubleshootingMsg);
     }
     
-    // Remove any potential **** or ** that might slip through, as per user request.
     textResponse = textResponse.replace(/\*\*\*\*/g, '').replace(/\*\*/g, '');
 
     return textResponse;
@@ -186,6 +201,7 @@ export const suggestTrainingPath = async (formData: FormData): Promise<string> =
   } catch (e: any) {
     console.error("Erro ao chamar a API Gemini:", e);
 
+    // If the error was already one of our specific initialization errors, re-throw it.
     if (e instanceof Error && e.message.startsWith("O serviço SkillMap AI não está disponível")) {
       throw e;
     }
@@ -197,13 +213,16 @@ export const suggestTrainingPath = async (formData: FormData): Promise<string> =
     } else if (typeof e === 'string') {
       detailedErrorMessage = `Falha ao gerar trilha de treinamento: ${e}`;
     } else {
-      detailedErrorMessage = "Falha ao gerar trilha de treinamento devido a um erro desconhecido.";
+      detailedErrorMessage = "Falha ao gerar trilha de treinamento devido a um erro desconhecido durante a chamada da API.";
     }
     
     if (e?.message?.toLowerCase().includes('api key') || e?.toString().toLowerCase().includes('api key not valid')) {
         detailedErrorMessage += ` Detalhe da API: Problema com a Chave de API (pode ser inválida, não autorizada ou com cotas excedidas).`;
     } else if (e?.message) {
-        detailedErrorMessage += ` Detalhe da API: ${e.message}`;
+        // Include specific API error message if available and not already part of the main message
+        if (!detailedErrorMessage.includes(e.message)) {
+            detailedErrorMessage += ` Detalhe da API: ${e.message}`;
+        }
     }
 
     detailedErrorMessage += " Por favor, verifique as cotas da sua chave de API, conexão de rede e detalhes de entrada. Se o problema continuar, contate o suporte ou verifique o status do serviço.";
