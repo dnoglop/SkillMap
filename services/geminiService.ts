@@ -1,18 +1,34 @@
 
 
+
 import { GoogleGenAI } from "@google/genai";
 import type { GenerateContentResponse } from "@google/genai";
 import type { FormData, NivelMaturidade, MetodoAvaliacaoImpacto } from '../types';
 
 let apiKeyFromEnv: string | undefined = undefined;
 
-if (typeof process !== 'undefined' && process.env && typeof process.env.API_KEY === 'string') {
-  apiKeyFromEnv = process.env.API_KEY;
-} else {
+// Try to get API_KEY, then common prefixed versions
+if (typeof process !== 'undefined' && process.env) {
+  if (typeof process.env.API_KEY === 'string' && process.env.API_KEY.trim() !== '') {
+    apiKeyFromEnv = process.env.API_KEY;
+  } else if (typeof process.env.NEXT_PUBLIC_API_KEY === 'string' && process.env.NEXT_PUBLIC_API_KEY.trim() !== '') {
+    apiKeyFromEnv = process.env.NEXT_PUBLIC_API_KEY;
+    console.info("INFO: Usando API_KEY de process.env.NEXT_PUBLIC_API_KEY.");
+  } else if (typeof process.env.VITE_API_KEY === 'string' && process.env.VITE_API_KEY.trim() !== '') {
+    apiKeyFromEnv = process.env.VITE_API_KEY;
+    console.info("INFO: Usando API_KEY de process.env.VITE_API_KEY.");
+  } else if (typeof process.env.REACT_APP_API_KEY === 'string' && process.env.REACT_APP_API_KEY.trim() !== '') {
+    apiKeyFromEnv = process.env.REACT_APP_API_KEY;
+    console.info("INFO: Usando API_KEY de process.env.REACT_APP_API_KEY.");
+  }
+}
+
+
+if (!apiKeyFromEnv) {
   console.warn(
-    "AVISO: A variável de ambiente API_KEY não foi encontrada ou 'process.env' não está acessível. " +
+    "AVISO: A variável de ambiente API_KEY (ou suas variações prefixadas como NEXT_PUBLIC_API_KEY, VITE_API_KEY) não foi encontrada ou 'process.env' não está acessível. " +
     "O serviço SkillMap AI necessita da API_KEY para funcionar. " +
-    "Se esta mensagem aparece no browser, garanta que API_KEY é injetada no ambiente de execução, " +
+    "Se esta mensagem aparece no browser, garanta que API_KEY (ou uma de suas versões prefixadas) é injetada no ambiente de execução do Vercel (ou sua plataforma de deploy), " +
     "ou o serviço de IA não funcionará."
   );
 }
@@ -23,7 +39,7 @@ if (apiKeyFromEnv) {
   try {
     ai = new GoogleGenAI({ apiKey: apiKeyFromEnv });
   } catch (e) {
-    console.error("Falha ao inicializar o cliente GoogleGenAI:", e);
+    console.error("Falha ao inicializar o cliente GoogleGenAI com a API_KEY fornecida. Isso pode ocorrer se a chave for inválida, as cotas foram excedidas, ou houver problemas de rede/configuração. Detalhes do erro:", e);
     ai = null; // Ensure ai is null if initialization fails
   }
 }
@@ -137,7 +153,7 @@ FRASE DE MOTIVAÇÃO: [Crie uma frase de motivação e incentivo, usando o conte
 
 export const suggestTrainingPath = async (formData: FormData): Promise<string> => {
   if (!ai) {
-    throw new Error("O serviço SkillMap AI não está disponível. Causa provável: A Chave de API (API_KEY) não foi configurada corretamente no ambiente de execução ou falha na inicialização do serviço. Verifique as configurações e os logs do console.");
+    throw new Error("O serviço SkillMap AI não está disponível. Causa provável: A Chave de API (API_KEY ou suas variações prefixadas como NEXT_PUBLIC_API_KEY) não foi configurada corretamente no ambiente de execução ou falha na inicialização do serviço. Verifique as configurações do seu projeto no Vercel (ou sua plataforma de deploy) e os logs do console.");
   }
   
   const prompt = buildPrompt(formData);
