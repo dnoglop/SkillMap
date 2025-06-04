@@ -1,53 +1,70 @@
 
 import { GoogleGenAI } from "@google/genai";
 import type { GenerateContentResponse } from "@google/genai";
-import type { FormData, NivelMaturidade, MetodoAvaliacaoImpacto } from '../types';
+import type { FormData, NivelMaturidade } from '../types';
 
-let apiKeyFromEnv: string | undefined = undefined;
-let apiKeyFound: boolean = false;
-let genAiInitializationError: Error | null = null;
+let apiKey: string | undefined = undefined;
+let apiKeySource: string = "Não encontrada";
 
-// Try to get API_KEY, then common prefixed versions
-if (typeof process !== 'undefined' && process.env) {
-  if (typeof process.env.API_KEY === 'string' && process.env.API_KEY.trim() !== '') {
-    apiKeyFromEnv = process.env.API_KEY;
-    console.info("INFO: Usando API_KEY de process.env.API_KEY.");
-  } else if (typeof process.env.NEXT_PUBLIC_API_KEY === 'string' && process.env.NEXT_PUBLIC_API_KEY.trim() !== '') {
-    apiKeyFromEnv = process.env.NEXT_PUBLIC_API_KEY;
-    console.info("INFO: Usando API_KEY de process.env.NEXT_PUBLIC_API_KEY.");
-  } else if (typeof process.env.VITE_API_KEY === 'string' && process.env.VITE_API_KEY.trim() !== '') {
-    apiKeyFromEnv = process.env.VITE_API_KEY;
-    console.info("INFO: Usando API_KEY de process.env.VITE_API_KEY.");
-  } else if (typeof process.env.REACT_APP_API_KEY === 'string' && process.env.REACT_APP_API_KEY.trim() !== '') {
-    apiKeyFromEnv = process.env.REACT_APP_API_KEY;
-    console.info("INFO: Usando API_KEY de process.env.REACT_APP_API_KEY.");
+// 1. Tenta obter a chave de API da configuração global injetada por index.tsx
+if (typeof window !== 'undefined' && (window as any).SKILLMAP_CONFIG) {
+  const configKey = (window as any).SKILLMAP_CONFIG.API_KEY;
+  if (typeof configKey === 'string' && configKey.trim() !== '') {
+    apiKey = configKey;
+    apiKeySource = "window.SKILLMAP_CONFIG.API_KEY (definida em index.tsx)";
   }
 }
 
+// 2. Fallback (menos provável de funcionar no Vercel para o frontend se o passo 1 falhar, mas bom para local)
+// Esta seção agora é mais um fallback ou para cenários onde window.SKILLMAP_CONFIG não foi populado.
+if (!apiKey && typeof process !== 'undefined' && process.env) {
+  console.warn("geminiService: API Key não encontrada em window.SKILLMAP_CONFIG. Tentando process.env (fallback).");
+  if (typeof process.env.NEXT_PUBLIC_API_KEY === 'string' && process.env.NEXT_PUBLIC_API_KEY.trim() !== '') {
+    apiKey = process.env.NEXT_PUBLIC_API_KEY;
+    apiKeySource = "process.env.NEXT_PUBLIC_API_KEY (fallback)";
+  } else if (typeof process.env.VITE_API_KEY === 'string' && process.env.VITE_API_KEY.trim() !== '') {
+    apiKey = process.env.VITE_API_KEY;
+    apiKeySource = "process.env.VITE_API_KEY (fallback)";
+  } else if (typeof process.env.REACT_APP_API_KEY === 'string' && process.env.REACT_APP_API_KEY.trim() !== '') {
+    apiKey = process.env.REACT_APP_API_KEY;
+    apiKeySource = "process.env.REACT_APP_API_KEY (fallback)";
+  } else if (typeof process.env.API_KEY === 'string' && process.env.API_KEY.trim() !== '') {
+    apiKey = process.env.API_KEY;
+    apiKeySource = "process.env.API_KEY (fallback local)";
+  }
+}
 
+let apiKeyFoundStatus: boolean = false;
+let genAiInitializationError: Error | null = null;
 let ai: GoogleGenAI | null = null;
 
-if (apiKeyFromEnv) {
-  apiKeyFound = true;
+if (apiKey && typeof apiKey === 'string' && apiKey.trim() !== '') {
+  apiKeyFoundStatus = true;
+  // Log reduzido por segurança, mas confirma a fonte.
+  console.info(`INFO (geminiService): Chave de API será utilizada. Fonte: ${apiKeySource}.`);
   try {
-    ai = new GoogleGenAI({ apiKey: apiKeyFromEnv });
-    console.info("INFO: Cliente GoogleGenAI inicializado com sucesso.");
+    ai = new GoogleGenAI({ apiKey });
+    console.info("INFO (geminiService): Cliente GoogleGenAI inicializado com sucesso.");
   } catch (e) {
-    console.error("ERRO CRÍTICO: Falha ao inicializar o cliente GoogleGenAI com a API_KEY fornecida. Detalhes:", e);
+    console.error(`ERRO CRÍTICO (geminiService): Falha ao inicializar o cliente GoogleGenAI com a API_KEY obtida de ${apiKeySource}. Detalhes:`, e);
     if (e instanceof Error) {
         genAiInitializationError = e;
     } else {
         genAiInitializationError = new Error(String(e));
     }
-    ai = null; // Ensure ai is null if initialization fails
+    ai = null;
   }
 } else {
-  apiKeyFound = false;
+  apiKeyFoundStatus = false;
   console.warn(
-    "AVISO: A variável de ambiente API_KEY (ou suas variações prefixadas como NEXT_PUBLIC_API_KEY, VITE_API_KEY) não foi encontrada ou 'process.env' não está acessível. " +
-    "O serviço SkillMap AI necessita da API_KEY para funcionar. " +
-    "Se esta mensagem aparece no browser, garanta que API_KEY (ou uma de suas versões prefixadas) é injetada no ambiente de execução do Vercel (ou sua plataforma de deploy), " +
-    "ou o serviço de IA não funcionará."
+    "AVISO (geminiService): Nenhuma Chave de API válida foi encontrada. \n" +
+    "Fonte primária (window.SKILLMAP_CONFIG.API_KEY) não continha uma chave válida. \n" +
+    "Tentativas de fallback via process.env também falharam ou não encontraram uma chave. \n" +
+    "O serviço SkillMap AI necessita da API_KEY para funcionar. \n" +
+    "Verifique: \n" +
+    "  1. Se a variável NEXT_PUBLIC_API_KEY (ou VITE_API_KEY, etc.) está configurada corretamente no seu projeto Vercel. \n" +
+    "  2. Se o código no início do 'index.tsx' está sendo executado e capaz de ler essa variável de ambiente. \n" +
+    "  3. Os logs do console para mensagens do 'API Key injector (index.tsx)'."
   );
 }
 
@@ -161,15 +178,22 @@ FRASE DE MOTIVAÇÃO: [Crie uma frase de motivação e incentivo, usando o conte
 export const suggestTrainingPath = async (formData: FormData): Promise<string> => {
   if (!ai) {
     let specificReason = "";
-    if (!apiKeyFound) {
-      specificReason = "A Chave de API (API_KEY ou suas variações prefixadas como NEXT_PUBLIC_API_KEY) não foi encontrada no ambiente de execução. Verifique as configurações de variáveis de ambiente no Vercel (ou sua plataforma de deploy) e os logs do console. Certifique-se que a variável (ex: NEXT_PUBLIC_API_KEY) está corretamente definida e que um novo deploy foi feito após a alteração.";
+    if (!apiKeyFoundStatus) {
+      specificReason = "A Chave de API (NEXT_PUBLIC_API_KEY ou similar) não foi encontrada. \n" +
+                       "Causas prováveis: \n" +
+                       "  1. A variável de ambiente (ex: NEXT_PUBLIC_API_KEY) não está configurada corretamente no seu projeto Vercel. \n" +
+                       "  2. A configuração no Vercel está incorreta ou um novo deploy não foi feito após a alteração. \n" +
+                       "  3. O código no início do arquivo 'index.tsx' não conseguiu capturar a chave de process.env e passá-la para 'window.SKILLMAP_CONFIG.API_KEY'. \n" +
+                       "Verifique os logs do console do navegador (procure por mensagens de 'API Key injector (index.tsx)' e avisos do 'geminiService').";
     } else if (genAiInitializationError) {
-      specificReason = `A Chave de API foi encontrada, mas a inicialização do serviço de IA falhou. Detalhe do erro: '${genAiInitializationError.message}'. Isso pode ser devido a uma chave inválida, API não habilitada no projeto Google Cloud, problemas de cota/faturamento, ou configuração incorreta da chave. Verifique os logs do console para mais detalhes e as configurações da sua chave no Google AI Studio ou Google Cloud Console.`;
+      specificReason = `A Chave de API foi encontrada (através de: ${apiKeySource}), mas a inicialização do serviço de IA falhou. \n" +
+                       "Detalhe do erro do SDK Gemini: '${genAiInitializationError.message}'. \n" +
+                       "Isso pode ser devido a uma chave inválida, API do Gemini não habilitada no projeto Google Cloud, problemas de cota/faturamento, ou outra configuração incorreta da chave. \n" +
+                       "Verifique os logs do console para mais detalhes e as configurações da sua chave no Google AI Studio ou Google Cloud Console.`;
     } else {
-      // This case should ideally not be hit if the logic above is correct
-      specificReason = "O serviço de IA não está inicializado por um motivo desconhecido, embora a chave de API pareça ter sido encontrada. Verifique os logs do console para mensagens de erro detalhadas.";
+      specificReason = "O serviço de IA não está inicializado por um motivo desconhecido. A chave de API parece ter sido encontrada (ou não houve erro na sua busca), mas a instância do cliente de IA não foi criada. Verifique os logs do console.";
     }
-    throw new Error(`O serviço SkillMap AI não está disponível. Causa provável: ${specificReason}`);
+    throw new Error(`O serviço SkillMap AI não está disponível. ${specificReason}`);
   }
   
   const prompt = buildPrompt(formData);
@@ -201,7 +225,6 @@ export const suggestTrainingPath = async (formData: FormData): Promise<string> =
   } catch (e: any) {
     console.error("Erro ao chamar a API Gemini:", e);
 
-    // If the error was already one of our specific initialization errors, re-throw it.
     if (e instanceof Error && e.message.startsWith("O serviço SkillMap AI não está disponível")) {
       throw e;
     }
@@ -219,7 +242,6 @@ export const suggestTrainingPath = async (formData: FormData): Promise<string> =
     if (e?.message?.toLowerCase().includes('api key') || e?.toString().toLowerCase().includes('api key not valid')) {
         detailedErrorMessage += ` Detalhe da API: Problema com a Chave de API (pode ser inválida, não autorizada ou com cotas excedidas).`;
     } else if (e?.message) {
-        // Include specific API error message if available and not already part of the main message
         if (!detailedErrorMessage.includes(e.message)) {
             detailedErrorMessage += ` Detalhe da API: ${e.message}`;
         }

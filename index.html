@@ -7,6 +7,11 @@
     <title>SkillMap | Criando treinamento com IA</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🗺️</text></svg>">
+    <script>
+      // Inicializa o objeto de configuração global.
+      // Ele será populado pelo index.tsx com a API Key.
+      window.SKILLMAP_CONFIG = {};
+    </script>
 <script type="importmap">
 {
   "imports": {
@@ -20,7 +25,7 @@
 }
 </script>
 </head>
-<body class="bg-slate-50 min-h-screen font-sans">
+<body class="bg-slate-50 min-h-screen font-sans"> {/* Changed background to a simpler one, as landing page has its own specific background. App content will sit on this if not landing. */}
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
 </body>
