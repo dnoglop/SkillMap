@@ -5,7 +5,7 @@ import { TrainingPathDisplay } from './components/TrainingPathDisplay'; // Corre
 import { LoadingSpinner } from './components/LoadingSpinner';
 import { ErrorMessage } from './components/ErrorMessage';
 import { LandingPage } from './components/LandingPage'; // Import LandingPage
-import { suggestTrainingPath } from './services/geminiService';
+import { suggestTrainingPath, analyzeObservations } from './services/geminiService';
 import type { FormData, TrainingPath } from './types';
 
 const App: React.FC = () => {
@@ -19,10 +19,30 @@ const App: React.FC = () => {
     setIsLoading(true);
     setError(null);
     setTrainingPath(null);
+
+    let analyzedSummary: string | undefined = undefined;
+    if (formData.observacoesAdicionais && formData.observacoesAdicionais.trim() !== "") {
+      try {
+        console.info("INFO (App.tsx): Iniciando análise das observações adicionais.");
+        analyzedSummary = await analyzeObservations(formData.observacoesAdicionais);
+        console.info("INFO (App.tsx): Análise das observações adicionais concluída.", analyzedSummary);
+        // Check if the summary is the default "no observations" message from analyzeObservations itself
+        if (analyzedSummary === "Nenhuma observação adicional fornecida para análise.") {
+            analyzedSummary = undefined; // Treat as no summary to avoid sending this specific string to buildPrompt
+        }
+      } catch (analysisError) {
+        console.warn("AVISO (App.tsx): Falha ao analisar observações adicionais. A trilha será gerada sem este resumo. Erro:", analysisError);
+        // analyzedSummary remains undefined, so suggestTrainingPath will proceed without it
+      }
+    }
+
     try {
-      const path = await suggestTrainingPath(formData);
+      console.info("INFO (App.tsx): Iniciando geração da trilha de treinamento.");
+      // Pass analyzedSummary to suggestTrainingPath
+      const path = await suggestTrainingPath(formData, analyzedSummary);
       setTrainingPath(path);
       setShowForm(false); // Hide form and show results
+      console.info("INFO (App.tsx): Trilha de treinamento gerada com sucesso.");
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);

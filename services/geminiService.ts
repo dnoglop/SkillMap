@@ -77,12 +77,25 @@ function nivelMaturidadeLabel(nivel?: NivelMaturidade): string {
   }
 }
 
-function buildPrompt(data: FormData): string {
+function buildPrompt(data: FormData, analyzedObservationsSummary?: string): string {
   const sanitize = (text?: string): string => text ? text.replace(/\n+/g, '\n').trim() : 'Não especificado';
 
-  return `Você é um conselheiro especialista em treinamento corporativo e Design de Experiência de Aprendizagem (LXD). Sua tarefa é gerar uma sugestão de trilha de treinamento personalizada com base nas seguintes informações da equipe. A resposta DEVE ser em Português do Brasil. Adote um tom de voz que ofereça dicas e possibilidades de melhoria, como um mentor experiente.
+  let additionalInsightsSection = "";
+  if (analyzedObservationsSummary &&
+      analyzedObservationsSummary.trim() !== "" &&
+      analyzedObservationsSummary.trim() !== "Nenhuma observação adicional fornecida para análise.") {
+    additionalInsightsSection = `
 
-Informações da Equipe Fornecidas:
+## Insights Adicionais Derivados das Observações do Usuário
+A análise das observações adicionais fornecidas pelo usuário destacou os seguintes pontos:
+${analyzedObservationsSummary}
+Considere estes pontos ao formular sua sugestão de trilha.
+`;
+  }
+
+  const introPart = `Você é um conselheiro especialista em treinamento corporativo e Design de Experiência de Aprendizagem (LXD). Sua tarefa é gerar uma sugestão de trilha de treinamento personalizada com base nas seguintes informações da equipe. A resposta DEVE ser em Português do Brasil. Adote um tom de voz que ofereça dicas e possibilidades de melhoria, como um mentor experiente.`;
+
+  const teamInfoPart = `Informações da Equipe Fornecidas:
 - Time/Departamento: ${sanitize(data.timeDepartamento)}
 - Principal Objetivo com o Treinamento: ${sanitize(data.objetivoPrincipal)}
 - Perfil da Maioria dos Colaboradores: ${sanitize(data.perfilEquipe)}
@@ -93,9 +106,9 @@ Informações da Equipe Fornecidas:
 - Método Desejado para Avaliar Impacto: ${sanitize(data.metodoAvaliacaoImpacto)}
 - Urgência para Aplicar o Treinamento: ${sanitize(data.urgenciaAplicacao)}
 - Competências Chave a Desenvolver: ${data.competenciasDesenvolver.length > 0 ? data.competenciasDesenvolver.join(', ') : 'Não especificado'}
-- Observações Adicionais do Usuário: ${sanitize(data.observacoesAdicionais) || "Nenhuma observação adicional fornecida."}
+- Observações Adicionais do Usuário: ${sanitize(data.observacoesAdicionais) || "Nenhuma observação adicional fornecida."}`;
 
-# Prompt Otimizado para Geração de Trilha de Treinamento
+  const mainPromptStructure = `# Prompt Otimizado para Geração de Trilha de Treinamento
 
 ## Contexto
 Você é um especialista em design instrucional que criará uma trilha de treinamento personalizada com base nos dados fornecidos. Use metodologias reconhecidas (ADDIE, LXD, Kirkpatrick) e mantenha foco prático e acionável.
@@ -172,7 +185,7 @@ FRASE DE MOTIVAÇÃO: [Crie uma frase de motivação e incentivo, usando o conte
 `;
 }
 
-export const suggestTrainingPath = async (formData: FormData): Promise<string> => {
+export const suggestTrainingPath = async (formData: FormData, analyzedObservationsSummary?: string): Promise<string> => {
   let currentAiClient: GoogleGenAI;
   try {
     currentAiClient = getAiClient();
@@ -183,18 +196,19 @@ export const suggestTrainingPath = async (formData: FormData): Promise<string> =
     throw new Error(`O serviço SkillMap AI não está disponível. Razão: ${reason}`);
   }
   
-  const prompt = buildPrompt(formData);
+  const prompt = buildPrompt(formData, analyzedObservationsSummary);
   
   try {
-    const response: GenerateContentResponse = await currentAiClient.models.generateContent({
-      model: 'gemini-2.5-flash-preview-04-17', 
-      contents: prompt, 
-      config: { 
+    const generationConfig = {
         temperature: 0.65, 
         maxOutputTokens: 8000, 
         topP: 0.9, 
         topK: 45, 
-      }
+    };
+    const response: GenerateContentResponse = await currentAiClient.models.generateContent({
+      model: 'gemini-2.5-flash-preview-04-17',
+      contents: [{ role: "user", parts: [{text: prompt}] }],
+      generationConfig: generationConfig,
     });
     
     let textResponse = response.text; 
@@ -243,6 +257,72 @@ export const suggestTrainingPath = async (formData: FormData): Promise<string> =
     }
 
     detailedErrorMessage += " Por favor, verifique também as cotas da sua chave de API, conexão de rede e detalhes de entrada. Se o problema continuar, contate o suporte ou verifique o status do serviço Gemini.";
+    throw new Error(detailedErrorMessage);
+  }
+};
+
+export const analyzeObservations = async (observations: string): Promise<string> => {
+  if (!observations || observations.trim() === "") {
+    return "Nenhuma observação adicional fornecida para análise.";
+  }
+
+  let currentAiClient: GoogleGenAI;
+  try {
+    currentAiClient = getAiClient();
+  } catch (initError: any) {
+    const reason = lastInitializationError?.message || initError.message || "Erro desconhecido durante a configuração do serviço de IA.";
+    throw new Error(`Serviço de análise de observações não disponível. Razão: ${reason}`);
+  }
+
+  const analysisPrompt = `Você é um assistente de IA especializado em identificar os pontos cruciais em textos. Analise as seguintes observações de um usuário e retorne um resumo conciso dos temas principais, preocupações ou solicitações específicas em Português do Brasil. Formate como bullet points curtos se possível, ou um pequeno parágrafo se fizer mais sentido. Observações: "${observations}"`;
+
+  try {
+    const response: GenerateContentResponse = await currentAiClient.models.generateContent({
+      model: 'gemini-2.5-flash-preview-04-17', // Consistent with suggestTrainingPath
+      contents: [{ role: "user", parts: [{ text: analysisPrompt }] }], // Corrected contents format
+      generationConfig: { // Corrected config property name
+        temperature: 0.5,
+        maxOutputTokens: 500,
+        topP: 0.9,
+        topK: 40,
+      }
+    });
+
+    const textResponse = response.text;
+
+    if (!textResponse || textResponse.trim() === "") {
+      console.warn("API Gemini retornou uma resposta vazia ou apenas com espaços em branco para a análise de observações:", analysisPrompt);
+      throw new Error("A IA gerou uma resposta vazia para a análise das observações.");
+    }
+
+    return textResponse.trim();
+
+  } catch (e: any) {
+    console.error("Erro ao chamar a API Gemini para analisar observações:", e);
+    if (e instanceof Error && e.message.startsWith("Serviço de análise de observações não disponível")) {
+      throw e;
+    }
+    if (lastInitializationError && e.message === `Falha na inicialização do serviço Gemini: ${lastInitializationError.message}`) {
+        throw new Error(`Serviço de análise de observações não disponível. Razão: ${lastInitializationError.message}`);
+    }
+
+    let detailedErrorMessage: string;
+    if (e instanceof Error) {
+      detailedErrorMessage = `Falha ao analisar observações: ${e.message}`;
+    } else if (typeof e === 'string') {
+      detailedErrorMessage = `Falha ao analisar observações: ${e}`;
+    } else {
+      detailedErrorMessage = "Falha ao analisar observações devido a um erro desconhecido durante a chamada da API.";
+    }
+
+    const errorMessageLower = e?.message?.toLowerCase() || e?.toString().toLowerCase();
+    if (errorMessageLower.includes('api key') || errorMessageLower.includes('api key not valid') || errorMessageLower.includes('permission denied')) {
+        detailedErrorMessage += ` Detalhe da API: Problema com a Chave de API.`;
+    } else if (e?.message) {
+        if (!detailedErrorMessage.includes(e.message)) {
+            detailedErrorMessage += ` Detalhe da API: ${e.message}`;
+        }
+    }
     throw new Error(detailedErrorMessage);
   }
 };
